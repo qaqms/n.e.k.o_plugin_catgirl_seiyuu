@@ -1,0 +1,38 @@
+[project]
+name = "catgirl_seiyuu"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pillow>=10.0.0",
+    "rapidocr-onnxruntime>=1.3.0",
+]
+
+# 仅开发/测试依赖，不进运行时
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+# 同 fc/ym：importlib 收集模式兼容独立仓库与官方市场 CI 挂载两种环境
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+
+[tool.neko.build]
+exclude_dirs = [
+    ".github",
+    ".vscode",
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "tests",
+    "tools",
+]
+exclude_files = [
+    ".gitignore",
+    "uv.lock",
+    "ruff.toml",
+    "DESIGN.md",
+    "CHANGELOG.md",
+]

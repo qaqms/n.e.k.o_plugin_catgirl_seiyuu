@@ -1,0 +1,38 @@
+[plugin_runtime]
+enabled = true
+auto_start = false
+
+# 配音行为（全部键与 plugin.toml [dub] 段一一对应，值即出厂默认）。
+# 运行时配置优先级高于 plugin.toml；面板保存的覆写会写到这里。
+[dub]
+poll_interval_ms = 900
+idle_poll_interval_ms = 2500
+stable_frames = 2
+similarity_threshold = 0.9
+dedupe_window = 64
+min_significant_chars = 2
+max_line_chars = 220
+ui_words = ["保存", "读取", "自动", "快进", "跳过", "历史", "设置", "消息记录", "BACKLOG", "SAVE", "LOAD", "AUTO", "SKIP", "CLICK TO CONTINUE", "クリックで継続"]
+dub_protagonist = false
+dub_monologue = true
+protagonist_names = []
+pause_on_user_message = true
+slow_poll_when_unfocused = true
+mirror_text = true
+lanlan_name = ""
+speak_timeout_s = 120
+main_server_port = 0
+speak_game_type = "catgirl_seiyuu"
+
+[ocr]
+engine_type = "onnxruntime"
+lang_type = "ch"
+model_type = "mobile"
+ocr_version = "PP-OCRv4"
+
+# 对话框区域：相对目标窗口的比例坐标（面板框选后覆写）
+[region]
+x = 0.05
+y = 0.68
+w = 0.9
+h = 0.24

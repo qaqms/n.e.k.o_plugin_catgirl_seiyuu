@@ -1,0 +1,102 @@
+[plugin]
+id = "catgirl_seiyuu"
+name = "猫娘声优"
+description = "让猫娘用她本人的声音逐字朗读游戏台词：外部截屏 + OCR 读字（不触碰游戏进程，零封号风险），台词稳定/去重后经宿主 TTS 管线逐句播报，一句播完再播下一句。一句「打开配音模式」即可开始，主人说话自动暂停。"
+short_description = "Catgirl voices visual-novel dialogue line by line via screen OCR and host TTS; zero game injection."
+keywords = ["配音", "声优", "朗读", "dub", "dubbing", "voice", "galgame", "视觉小说", "visual novel", "文字冒险", "OCR", "截屏", "猫娘"]
+version = "0.1.0"
+type = "plugin"
+entry = "plugin.plugins.catgirl_seiyuu:CatgirlSeiyuuPlugin"
+
+[plugin.author]
+name = "qaqms"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
+
+[plugin.i18n]
+default_locale = "zh-CN"
+locales_dir = "i18n"
+
+[plugin.ui]
+enabled = true
+
+[[plugin.ui.panel]]
+id = "main"
+title = "猫娘声优"
+entry = "ui/panel.tsx"
+context = "dubbing"
+permissions = [
+    "state:read",
+    "config:read",
+    "action:call",
+]
+
+[[plugin.ui.guide]]
+id = "quickstart"
+title = "使用指南"
+entry = "docs/quickstart.md"
+permissions = ["state:read"]
+
+[plugin_runtime]
+enabled = true
+# fail-closed：不随宿主自动启动；开启后总开关（配音模式）仍需用户或主人指令显式打开
+auto_start = false
+
+[plugin.store]
+enabled = true
+
+# ---------------------------------------------------------------- 配音行为
+[dub]
+# 轮询间隔（毫秒）：对话框是打字机效果时，此值决定稳定窗口的时间分辨率
+poll_interval_ms = 900
+# 游戏窗口失焦时的降频轮询间隔（毫秒）
+idle_poll_interval_ms = 2500
+# 稳定窗口：连续 N 帧识别文本一致才播报（解决打字机半句）。
+# 实际等待时间 ≈ N × poll_interval_ms
+stable_frames = 2
+# 帧间文本相似度阈值：OCR 抖动（个别字符误读）不低于此值视为同一句
+similarity_threshold = 0.9
+# 去重窗口：最近 N 条已消费文本的 hash，防翻页/回看重播
+dedupe_window = 64
+# 有效字符下限/总长上限：低于下限视为噪声，超过上限视为整屏误读
+min_significant_chars = 2
+max_line_chars = 220
+# UI 词表：整行命中即跳过（引擎按钮、菜单等）
+ui_words = ["保存", "读取", "自动", "快进", "跳过", "历史", "设置", "消息记录", "BACKLOG", "SAVE", "LOAD", "AUTO", "SKIP", "CLICK TO CONTINUE", "クリックで継続"]
+# 主角第一人称台词是否也配（OCR 通道下按 speaker 命中主角名判定）
+dub_protagonist = false
+# 内心独白（整句被（）「」『』包裹）是否配
+dub_monologue = true
+# 主角名列表：行首「名字：」命中这里 → 按 dub_protagonist 处理
+protagonist_names = []
+# 主人在聊天里说话 → 自动暂停配音（配音让位于对话）
+pause_on_user_message = true
+# 目标窗口失去前台 → 降频轮询（false = 不降频，始终按 poll_interval_ms）
+slow_poll_when_unfocused = true
+# 播报文本是否同步显示聊天气泡（宿主 mirror）
+mirror_text = true
+# 指定角色名（留空 = 宿主当前角色）
+lanlan_name = ""
+# 单句播报的最长等待（秒）：含合成+播放
+speak_timeout_s = 120
+# 宿主 main server 端口（0 = 自动探测：import config → 缺省 48911）
+main_server_port = 0
+# speak 路由 game_type（B 层契约路径参数，一般不需要改）
+speak_game_type = "catgirl_seiyuu"
+
+# ---------------------------------------------------------------- OCR 引擎
+[ocr]
+engine_type = "onnxruntime"
+lang_type = "ch"
+model_type = "mobile"
+ocr_version = "PP-OCRv4"
+
+# ---------------------------------------------------------------- 对话框区域
+# 相对目标窗口的位置比例（0.0–1.0）。在面板「区域框选」中拖拽即可覆写。
+[region]
+x = 0.05
+y = 0.68
+w = 0.9
+h = 0.24
