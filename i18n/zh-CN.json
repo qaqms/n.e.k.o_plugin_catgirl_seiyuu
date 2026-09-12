@@ -33,5 +33,10 @@
   "fields.pauseOnUser": "主人说话时自动暂停",
   "fields.slowPollUnfocused": "失焦降频轮询",
   "fields.protagonistNames": "主角名（逗号分隔）",
-  "fields.uiWords": "UI 屏蔽词（逗号分隔）"
+  "fields.uiWords": "UI 屏蔽词（逗号分隔）",
+  "fields.captureMode": "截屏方式",
+  "capture.auto": "自动（窗口优先，失败回退桌面）",
+  "capture.window": "仅窗口本体（抗遮挡，个别游戏不支持）",
+  "capture.screen": "仅桌面截屏（旧行为）",
+  "panel.windowFilter": "窗口过滤"
 }

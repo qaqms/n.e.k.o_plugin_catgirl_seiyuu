@@ -46,12 +46,23 @@ type State = {
     slow_poll_when_unfocused?: boolean
     protagonist_names?: string[]
     ui_words?: string[]
+    capture_mode?: string
   }
+  target?: { hwnd?: number; title?: string; process?: string; minimized?: boolean }
   skipped?: SkipEntry[]
   ocr?: { available?: boolean; initialized?: boolean; error?: string; lang_type?: string; ocr_version?: string }
 }
 
-type WindowItem = { hwnd: number; title: string; pid: number }
+type WindowItem = {
+  hwnd: number
+  title: string
+  label?: string
+  process?: string
+  pid: number
+  minimized?: boolean
+  focused?: boolean
+  is_self?: boolean
+}
 
 const MODE_LABEL: Record<string, string> = {
   off: "未开启",
@@ -66,6 +77,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
   // ---- 目标窗口列表 ----
   const [windows, setWindows] = useState<WindowItem[]>([])
   const [selectedHwnd, setSelectedHwnd] = useState<string>("")
+  const [windowFilter, setWindowFilter] = useState("")
 
   const refreshWindows = useCallback(async () => {
     try {
@@ -148,6 +160,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
     slow_poll_when_unfocused: true,
     protagonist_names: "",
     ui_words: "",
+    capture_mode: "auto",
   })
   const [formInit, setFormInit] = useState(false)
   if (!formInit && s.poll_interval_ms !== undefined) {
@@ -161,6 +174,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
       slow_poll_when_unfocused: s.slow_poll_when_unfocused !== false,
       protagonist_names: (s.protagonist_names || []).join(","),
       ui_words: (s.ui_words || []).join(","),
+      capture_mode: String(s.capture_mode || "auto"),
     })
   }
   const patch = (key: string, value: any) => setForm({ ...form, [key]: value } as any)
@@ -177,6 +191,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
           slow_poll_when_unfocused: Boolean(form.slow_poll_when_unfocused),
           protagonist_names: String(form.protagonist_names || "").split(/[,，]/).map((v) => v.trim()).filter(Boolean),
           ui_words: String(form.ui_words || "").split(/[,，]/).map((v) => v.trim()).filter(Boolean),
+          capture_mode: String(form.capture_mode || "auto"),
         },
       })
       toast.success("设置已保存并生效")
@@ -209,7 +224,18 @@ export default function Panel(props: PluginSurfaceProps<State>) {
   }, [api, toast])
 
   const mode = state.mode || "off"
-  const windowOptions = windows.map((w) => ({ label: w.title, value: String(w.hwnd) }))
+  // 全量窗口交给面板过滤：按标题/进程名/句柄搜索，前台窗口带 ★、最小化带 [min]。
+  const filterKeys = windowFilter.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const filteredWindows = filterKeys.length
+    ? windows.filter((w) => {
+        const hay = `${w.title} ${w.process || ""} ${w.hwnd}`.toLowerCase()
+        return filterKeys.every((k) => hay.includes(k))
+      })
+    : windows
+  const windowOptions = filteredWindows.slice(0, 30).map((w) => ({
+    label: `${w.focused ? "★ " : ""}${w.minimized ? "[min] " : ""}${w.label || w.title || String(w.hwnd)}${w.process ? ` — ${w.process}` : ""}`,
+    value: String(w.hwnd),
+  }))
 
   return (
     <Page title={props.plugin.name} subtitle={t("panel.subtitle")}>
@@ -223,7 +249,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
           <StatCard label="待播队列" value={String(state.queue_size ?? 0)} />
           <StatCard label="焦点" value={state.focus ? "前台" : mode === "running" ? "失焦降频" : "—"} />
         </Grid>
-        <Text>{state.target?.title ? `目标：${state.target.title}` : "未选择目标窗口（默认前台窗口）"}</Text>
+        <Text>{state.target?.title || state.target?.process ? `目标：${state.target.title || state.target.label || ""}${state.target.process ? `（${state.target.process}）` : ""}${state.target.minimized ? " · 已最小化" : ""}` : "未选择目标窗口（默认前台窗口）"}</Text>
         {(state.current_line && <Text>正在朗读：{state.current_line}</Text>) || null}
       </Card>
 
@@ -247,9 +273,12 @@ export default function Panel(props: PluginSurfaceProps<State>) {
           {state.capture_supported === false && <Alert tone="warning">v0.1 截屏通道仅支持 Windows 桌面。</Alert>}
           <Grid columns={3}>
             <Select label="目标窗口" options={[{ label: "（跟随前台）", value: "" }, ...windowOptions]} value={selectedHwnd} onChange={(v: any) => setSelectedHwnd(typeof v === "string" ? v : v?.target?.value || "")} />
-            <Button onClick={refreshWindows}>{t("actions.windows")}</Button>
+            <Button onClick={refreshWindows}>{t("actions.windows")}{windows.length ? `（${windows.length}）` : ""}</Button>
             <Button onClick={grabPreview}>{t("actions.preview")}</Button>
           </Grid>
+          <Field label={t("panel.windowFilter")}>
+            <Input value={windowFilter} onChange={(v: any) => setWindowFilter(typeof v === "string" ? v : v?.target?.value || "")} placeholder="过滤：标题 / 进程名 / 句柄（空格分隔多词）" />
+          </Field>
           {preview ? (
             <div style={{ position: "relative", userSelect: "none" }}>
               <img
@@ -300,9 +329,16 @@ export default function Panel(props: PluginSurfaceProps<State>) {
               <Input value={form.protagonist_names} onChange={(v: any) => patch("protagonist_names", typeof v === "string" ? v : v?.target?.value || "")} />
             </Field>
           </Grid>
-          <Field label={t("fields.uiWords")}>
-            <Input value={form.ui_words} onChange={(v: any) => patch("ui_words", typeof v === "string" ? v : v?.target?.value || "")} />
-          </Field>
+            <Field label={t("fields.uiWords")}>
+              <Input value={form.ui_words} onChange={(v: any) => patch("ui_words", typeof v === "string" ? v : v?.target?.value || "")} />
+            </Field>
+            <Field label={t("fields.captureMode")}>
+              <Select options={[
+                { label: t("capture.auto"), value: "auto" },
+                { label: t("capture.window"), value: "window" },
+                { label: t("capture.screen"), value: "screen" },
+              ]} value={form.capture_mode} onChange={(v: any) => patch("capture_mode", typeof v === "string" ? v : v?.target?.value || "auto")} />
+            </Field>
           <Button tone="primary" onClick={saveSettings}>{t("actions.settings")}</Button>
         </Stack>
       </Card>

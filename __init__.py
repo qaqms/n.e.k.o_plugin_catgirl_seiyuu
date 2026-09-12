@@ -66,6 +66,9 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         # 自己聊天记录」的回声回路（OCR 读聊天气泡 → TTS 播报 → 新气泡…）。
         "exclude_host_window": True,
         "host_window_keywords": ["N.E.K.O"],
+        # 截屏方式：auto = PrintWindow 优先、黑帧/失败回退桌面截屏；
+        # window = 仅窗口本体渲染（遮挡免疫）；screen = 仅桌面截屏（v0.1 旧行为）。
+        "capture_mode": "auto",
     },
     "ocr": {
         "engine_type": "onnxruntime",
@@ -97,6 +100,7 @@ _DUB_PATCH_TYPES: dict[str, type] = {
     "speak_game_type": str,
     "exclude_host_window": bool,
     "host_window_keywords": list,
+    "capture_mode": str,
 }
 
 
@@ -214,6 +218,11 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
             port=int(dub.get("main_server_port", 0) or 0),
             game_type=str(dub.get("speak_game_type", PLUGIN_ID)),
         )
+        mode = str(dub.get("capture_mode", "auto")).strip().lower()
+        if mode not in capture.CAPTURE_MODES:
+            self.logger.warning("capture_mode 非法（{}），按 auto 执行", mode)
+            mode = "auto"
+        capture.set_capture_mode(mode)
 
     # ==================================================================
     # 生命周期
@@ -291,6 +300,11 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
             return
         if not capture.is_window_valid(self._target_hwnd):
             self._pause_with_error("target_window_gone")
+            return
+        if await asyncio.to_thread(capture.is_minimized, self._target_hwnd):
+            # 最小化窗没有可截的内容（PrintWindow 出旧帧/垃圾，桌面矩形是
+            # 哨兵坐标）：暂停而不是静默吃帧，还原后面板/语音「继续配音」即接。
+            self._pause_with_error("target_minimized: 请还原游戏窗口后继续")
             return
         try:
             frame = await asyncio.to_thread(capture.grab_window, self._target_hwnd)
@@ -428,7 +442,12 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
         return {
             "mode": self._mode.mode,
             "paused_reason": self._mode.paused_reason,
-            "target": {"hwnd": self._target_hwnd, "title": self._target_title},
+            "target": {
+                "hwnd": self._target_hwnd,
+                "title": self._target_title,
+                "process": capture.process_name(self._target_hwnd) if self._target_hwnd else "",
+                "minimized": bool(self._target_hwnd) and capture.is_minimized(self._target_hwnd),
+            },
             "focus": bool(self._target_hwnd) and capture.is_foreground(self._target_hwnd),
             "capture_supported": capture.supported(),
             "current_line": self._current_line,
@@ -446,6 +465,7 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
                 "slow_poll_when_unfocused": dub.get("slow_poll_when_unfocused"),
                 "protagonist_names": dub.get("protagonist_names"),
                 "ui_words": dub.get("ui_words"),
+                "capture_mode": dub.get("capture_mode", "auto"),
             },
             "skipped": list(self._gate.skipped),
             "ocr": self._ocr.status(),
@@ -470,6 +490,7 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
     _TARGET_ERRORS: dict[str, str] = {
         "invalid_hwnd": "目标窗口已失效（可能已关闭），请在面板重新选择窗口",
         "title_not_found": "找不到标题匹配的目标窗口",
+        "target_minimized": "目标窗口已最小化：请先还原游戏窗口再开始",
         "target_is_self": (
             "前台是 N.E.K.O 自己的窗口：请先切到游戏窗口再试，或在面板里指定目标窗口"
             "（可在 [dub] exclude_host_window 关闭此保护）"
@@ -535,6 +556,8 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
         )
         if not resolved_hwnd:
             return Err(SdkError(self._TARGET_ERRORS.get(err_reason) or "找不到目标窗口"))
+        if await asyncio.to_thread(capture.is_minimized, resolved_hwnd):
+            return Err(SdkError(self._TARGET_ERRORS["target_minimized"]))
         self._target_hwnd = resolved_hwnd
         self._target_title = resolved_title
         self._gate.reset()
@@ -615,13 +638,20 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
         return Ok({k: snap[k] for k in ("mode", "paused_reason", "last_error", "spoken", "current_line")})
 
     @ui.action(label=tr("actions.windows", default="List windows"), refresh_context=False)
-    @plugin_entry(id="dub_windows", name="窗口列表", description="列出可选的桌面窗口（面板框选目标用）。")
+    @plugin_entry(id="dub_windows", name="窗口列表", description="列出可选择的桌面窗口（面板框选目标用）。")
     async def dub_windows(self, **_):
         if not capture.supported():
             return Err(SdkError(capture.platform_reason() or "capture_unsupported"))
         wins = await asyncio.to_thread(capture.list_windows)
-        slim = [{"hwnd": w["hwnd"], "title": w["title"], "pid": w["pid"]} for w in wins[:60]]
-        return Ok({"windows": slim})
+        slim = [
+            {k: w.get(k) for k in ("hwnd", "title", "label", "process", "pid", "minimized", "focused", "is_self")}
+            for w in wins[:200]
+        ]
+        return Ok({
+            "windows": slim,
+            "total": len(wins),
+            "summary": f"共 {len(wins)} 个候选窗口（前台最前，含最小化/本程序标记）",
+        })
 
     @ui.action(label=tr("actions.preview", default="Capture preview"), refresh_context=False)
     @plugin_entry(
@@ -723,6 +753,11 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
                 if not isinstance(value, list):
                     return Err(SdkError(f"设置项 {key} 必须是列表"))
                 clean[key] = [str(v) for v in value]
+            elif key == "capture_mode":
+                value = str(value).strip().lower()
+                if value not in capture.CAPTURE_MODES:
+                    return Err(SdkError("capture_mode 只能是 auto/window/screen"))
+                clean[key] = value
             else:
                 clean[key] = str(value)
         merged = {**self._cfg["dub"], **clean}

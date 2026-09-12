@@ -33,5 +33,10 @@
   "fields.pauseOnUser": "Auto-pause when master talks",
   "fields.slowPollUnfocused": "Slow polling when unfocused",
   "fields.protagonistNames": "Protagonist names (comma separated)",
-  "fields.uiWords": "UI block words (comma separated)"
+  "fields.uiWords": "UI block words (comma separated)",
+  "fields.captureMode": "Capture method",
+  "capture.auto": "Auto (window render first, fall back to desktop)",
+  "capture.window": "Window render only (occlusion-proof; some games unsupported)",
+  "capture.screen": "Desktop grab only (legacy behaviour)",
+  "panel.windowFilter": "Filter windows"
 }
