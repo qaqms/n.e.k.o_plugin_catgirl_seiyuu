@@ -6,6 +6,14 @@
 
 纯聊天控制：不开面板、不碰鼠标，全程用嘴。
 
+### Fixed
+
+- **`@message(auto_start=True)` 签名漂移（致命）**：宿主 SDK 的 `message()` 已
+  不接受 `auto_start` 参数，插件模块在真实 SDK 下 import 即 TypeError——
+  v0.1.0/v0.1.1 的发布包在宿主元数据探测阶段就没有 `plugin.meta.json`，
+  导入后插件根本无法加载。移除该参数；并把测试桦的 `message` 改为与宿主
+  同签名的严格版，参数漂移从「打包才暴雷」提前到「测试即红」。
+
 ### Added
 
 - **`catgirl_seiyuu_resume` llm 工具**：对猫娘说「继续配音 / 接着念」即可从

@@ -396,7 +396,7 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
     # 消息联动：主人开口 → 配音让位
     # ==================================================================
 
-    @message(id="seiyuu_user_chat", source="chat", auto_start=True)
+    @message(id="seiyuu_user_chat", source="chat")
     async def on_user_chat(self, text: str = "", **kw):
         if not self._mode.is_running():
             return Ok({"paused": False})

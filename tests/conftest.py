@@ -146,12 +146,18 @@ def _make_sdk_module() -> types.ModuleType:
             return str(getattr(self.ctx, "plugin_id", "plugin"))
 
     mod.NekoPluginBase = NekoPluginBase
+    def _message_strict(*, id, name=None, description="", input_schema=None, source=None, metadata=None):
+        """与宿主 plugin.sdk.plugin.message 同签名：参数漂移（如已删除的
+        auto_start）在测试期即 TypeError，不等打包元数据探测才暴雷。"""
+
+        return _identity_decorator_factory(id=id, source=source)
+
     mod.neko_plugin = _identity_decorator
     mod.lifecycle = _identity_decorator_factory
     mod.timer_interval = _identity_decorator_factory
     mod.llm_tool = _identity_decorator_factory
     mod.plugin_entry = _identity_decorator_factory
-    mod.message = _identity_decorator_factory
+    mod.message = _message_strict
     mod.quick_action = _identity_decorator_factory
 
     class _UiNamespace:
