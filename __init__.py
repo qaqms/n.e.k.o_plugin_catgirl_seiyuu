@@ -49,6 +49,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "idle_poll_interval_ms": 2500,
         "stable_frames": 2,
         "similarity_threshold": 0.9,
+        # 句末标点优先：末位命中句读的候选冻结 2 帧即播；未命中的额外要求
+        # 末两帧完全一致（防打字机增长帧被相似链误计入稳定、半句开口）。
+        "punctuation_priority": True,
+        "sentence_end_chars": "。！？!?…」』",
         "dedupe_window": 64,
         "min_significant_chars": 2,
         "max_line_chars": 220,
@@ -85,6 +89,8 @@ _DUB_PATCH_TYPES: dict[str, type] = {
     "idle_poll_interval_ms": int,
     "stable_frames": int,
     "similarity_threshold": float,
+    "punctuation_priority": bool,
+    "sentence_end_chars": str,
     "dedupe_window": int,
     "min_significant_chars": int,
     "max_line_chars": int,
@@ -569,6 +575,7 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
             "settings": {
                 "poll_interval_ms": dub.get("poll_interval_ms"),
                 "stable_frames": dub.get("stable_frames"),
+                "punctuation_priority": dub.get("punctuation_priority"),
                 "dub_protagonist": dub.get("dub_protagonist"),
                 "dub_monologue": dub.get("dub_monologue"),
                 "pause_on_user_message": dub.get("pause_on_user_message"),

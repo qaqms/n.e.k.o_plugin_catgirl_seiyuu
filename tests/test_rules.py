@@ -119,3 +119,76 @@ def test_hard_reset_clears_dedupe():
     assert _settle(gate, "一句话") == "一句话"
     gate.hard_reset()
     assert _settle(gate, "一句话") == "一句话"
+
+
+# ------------------------------------------------ 句末标点优先（v0.2.2 主线 A）
+
+
+def test_growth_chain_no_longer_settles_mid_sentence():
+    """打字机逐帧变长、相邻帧相似度 ≥0.9（长句每帧只多一字）：增长中不得开口。"""
+
+    gate = _gate()  # stable_frames=2：v0.2.1 会在第 2 帧就把半句读出去
+    assert gate.consider("今天的晚霞真的很漂") is None
+    assert gate.consider("今天的晚霞真的很漂亮") is None  # 相似链计数满 2，但未冻结
+    assert gate.consider("今天的晚霞真的很漂亮呢") is None  # 仍在增长
+
+
+def test_punctuation_settles_at_two_frozen_frames_with_high_stable():
+    """句读结尾 + 冻结 2 帧：stable_frames 调到 5 也提前定型。"""
+
+    gate = _gate(stable_frames=5)
+    line = "今天的晚霞真的很漂亮呢。"
+    assert gate.consider(line) is None
+    assert gate.consider(line) == line
+
+
+def test_no_punctuation_needs_full_window_then_freeze():
+    """未命中句读：增长链可攒，但开口前必须冻结；stable=4 时第 2/3 帧不开口。"""
+
+    gate = _gate(stable_frames=4)
+    line = "今天的晚霞真的很漂亮呢"
+    assert gate.consider(line) is None  # 1
+    assert gate.consider(line) is None  # 2 冻结但未攒满 N 且无句读
+    assert gate.consider(line) is None  # 3
+    assert gate.consider(line) == line  # 4 满窗且冻结
+
+
+def test_punctuation_priority_off_is_legacy_behavior():
+    """开关关闭 = v0.2.1 纯 N 帧相似链：增长中也可定型（回归铁到旧版）。"""
+
+    gate = _gate(punctuation_priority=False)
+    assert gate.consider("今天的晚霞真的很漂") is None
+    assert gate.consider("今天的晚霞真的很漂亮") == "今天的晚霞真的很漂亮"
+
+
+def test_stuck_ocr_jitter_falls_back_to_chain_rescue():
+    """两帧交替抖动（永不冻结）：N+4 帧兜底强制定型，不漏整句。"""
+
+    gate = _gate(stable_frames=2)
+    a, b = "今天的晚霞真的很漂", "今天的晚霞真的很漂亮"  # ratio≈0.95 ≥0.9
+    outs = [gate.consider(t) for t in (a, b, a, b, a, b)]
+    assert outs[:5] == [None] * 5
+    assert outs[5] == b  # 第 6 帧 = need+4 兜底，采用最新一版
+
+
+def test_custom_and_empty_sentence_end_chars():
+    gate = _gate(stable_frames=5, sentence_end_chars="♪")
+    line = "ending♪"
+    assert gate.consider(line) is None
+    assert gate.consider(line) == line
+
+    gate2 = _gate(stable_frames=3, sentence_end_chars="")  # 空集：无提前定型
+    line2 = "好的。"
+    assert gate2.consider(line2) is None
+    assert gate2.consider(line2) is None  # streak 2 但句读集为空、未满 N
+    assert gate2.consider(line2) == line2
+
+
+def test_mid_pause_without_punctuation_still_settles_when_frozen():
+    """真正的停顿（非增长）即使无句读也要能播：不能把普通台词钉死。"""
+
+    gate = _gate(stable_frames=3)
+    half = "没有句号的台词"
+    assert gate.consider(half) is None
+    assert gate.consider(half) is None
+    assert gate.consider(half) == half

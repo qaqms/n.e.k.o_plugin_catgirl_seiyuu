@@ -14,6 +14,50 @@
 - **HUD/LLM 面向文案的本地化**：本轮豁免面（`_push_hud` 运行时文案、
   `@plugin_entry` description）继续中文直出，后续轮调研宿主 i18n 解析面。
 
+## [0.2.2] - 2026-09-12
+
+v1 体验清账轮（台账主项 4）：句末标点优先，堵死打字机增长帧半句开口。
+
+### Added
+
+- **句末标点优先（`punctuation_priority`，出厂默认开）**：`LineGate` 定型判定
+  重写为「冻结前提 + 句读快车道」三层：
+  1. **防半句（真正的 bug）**：长句逐帧变长时相邻帧相似度本就 ≥0.9（每帧
+     只多一两字），v0.2.1 的相似链会把增长帧误计入稳定计数、在半句处
+     开口；现在定型必须以**末两帧完全一致（冻结）**为前提，增长中不开口；
+  2. **不变迟钝**：末位命中句读（`sentence_end_chars`，默认
+     `。！？!?…」』`）的候选冻结 2 帧即播，`stable_frames` 调高也吃不到 N；
+     未命中句读的普通台词维持旧阈值语义（满 N 且冻结，need=2 时与旧版对
+     静止文本行为一致），只多等真停打的瞬时；
+  3. **兜底防漏播**：OCR 系统性抖字导致永不冻结时，相似链攒到 N+4 帧强制
+     定型（`STUCK_EXTRA_FRAMES`）；
+  4. 开关关闭 = v0.2.1 纯 N 帧窗口行为逐字回归（`sentence_end_chars=""` = 只
+     保留冻结铁律不提前定型），真机验证不满意可一键退回。
+- 新配置键 `dub.punctuation_priority`（bool）/ `dub.sentence_end_chars`（str）
+  全链路接通：plugin.toml / config.example.toml / DEFAULTS 消毒 / 面板开关 /
+  `update_settings` 白名单 / 快照 `settings`；`test_rules` +7 例（增长不开口 /
+  句读提前 / 无句读满窗 / 关闭回归 / 抖动兜底 / 自定义句读集 / 普通台词不被
+  钉死），`test_entries` 白名单断言同步。
+
+### Fixed
+
+- **面板「下载语言模型」前端 30s 掉镖（台账小毛病①实测清算）**：实测超时链
+  发现卡点不在宿主网关而在宿主桥默认 deadline——`surfaceApi.call` 不传
+  `timeoutMs` 时前端 30s（runtime.js 默认 / axios 全局 `API_TIMEOUT`）就中断，
+  而 `ocr_download` 入口允许 300s（宿主 `host.trigger` 按入口 meta.timeout
+  等待，非 `NEKO_PLUGIN_TRIGGER_TIMEOUT` 的 10s 默认）。现在面板 `call()`
+  wrapper 透传 options，`ocr_download` 显式 `{ timeoutMs: 315_000 }`：
+  240s（HTTP 下载）< 300s（入口）< 315s（面板），服务端错误先于前端 abort
+  到达；链路同源事实进 README 坑位存档。
+
+### Tools
+
+- `tools/spike_speak.py` 从 v0.1 历史形态更新到现行 B 层契约（台账小毛病②）：
+  补齐 X-CSRF-Token（/health → instance_id）/ Origin / body `game_type` 与
+  `HostSpeakClient` 逐字段同源（旧脚本对启用 CSRF 的宿主直接 403，会误判
+  「B 层不可用」）；新增契约字段形状打印与「时长过短可能未真播」提醒；
+  定位为人工排障自检，不进运行时、不进 release 门。
+
 ## [0.2.1] - 2026-09-12
 
 工程纪律收编轮（fc/ym 同源）：五门发布闸门落地，面板 i18n/错误码契约整改。

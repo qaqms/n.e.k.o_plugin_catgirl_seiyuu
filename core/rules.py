@@ -5,6 +5,12 @@ OCR 每帧给出的是一整块区域文本；本模块的职责是把它变成
 
 1. normalize：逐行清洗、去空行；
 2. 稳定窗口：连续 N 帧文本（相似度 ≥ threshold）一致才候选 —— 对抗打字机半句；
+   句末标点优先（punctuation_priority，默认开）在此之上加两条铁律：
+   定型必须以「末两帧完全一致」（冻结）为前提 —— 打字机逐帧变长时
+   相邻帧相似度也可能 ≥ threshold（长句每帧只多一两字），旧版会把增长帧
+   误计入稳定计数、在半句处开口；末位命中句读的候选冻结 2 帧即播
+   （stable_frames 调高也不迟钝）；OCR 抖动永不冻结时以 N+4 帧兜底强制定型，
+   防整句漏播。开关关闭 = v0.2.1 纯 N 帧窗口行为。
 3. 去重窗口：最近 N 条已消费文本 hash（翻页/回看/循环待机不重播）；
 4. 规则过滤：有效字符下限、总长上限、纯符号、UI 词整行命中；
 5. speaker/独白仲裁：行首「名字：」命中主角名 → 按 dub_protagonist；
@@ -37,6 +43,22 @@ _WRAP_PAIRS: tuple[tuple[str, str], ...] = (
 
 _WS_RE = re.compile(r"[ \t\f\v\u3000]+")
 _SIGNIFICANT_RE = re.compile(r"[0-9A-Za-z\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]")
+
+# 句末标点默认集：文本末位命中其一 → 视为「说完的整句」，允许提前定型。
+DEFAULT_SENTENCE_END_CHARS = "。！？!?…」』"
+
+# 冻结失败兜底：连续 N+STUCK_EXTRA_FRAMES 帧仍等不来完全一致（OCR 系统性
+# 抖字）→ 强制定型，宁晚半拍不漏整句。
+STUCK_EXTRA_FRAMES = 4
+
+
+def ends_with_sentence_end(text: str, chars: str) -> bool:
+    """拍平空白后末位是否命中句读集；chars 为空 → 永不命中（纯 N 帧窗口）。"""
+
+    if not chars:
+        return False
+    flat = flat_text(text)
+    return bool(flat) and flat[-1] in chars
 
 
 def normalize_text(raw: str) -> str:
@@ -103,6 +125,8 @@ def is_monologue(text: str) -> bool:
 class GateConfig:
     stable_frames: int = 2
     similarity_threshold: float = 0.9
+    punctuation_priority: bool = True
+    sentence_end_chars: str = DEFAULT_SENTENCE_END_CHARS
     dedupe_window: int = 64
     min_significant_chars: int = 2
     max_line_chars: int = 220
@@ -116,6 +140,8 @@ class GateConfig:
         return cls(
             stable_frames=max(1, int(dub.get("stable_frames", 2))),
             similarity_threshold=float(dub.get("similarity_threshold", 0.9)),
+            punctuation_priority=bool(dub.get("punctuation_priority", True)),
+            sentence_end_chars=str(dub.get("sentence_end_chars", DEFAULT_SENTENCE_END_CHARS)),
             dedupe_window=max(1, int(dub.get("dedupe_window", 64))),
             min_significant_chars=max(0, int(dub.get("min_significant_chars", 2))),
             max_line_chars=max(10, int(dub.get("max_line_chars", 220))),
@@ -135,6 +161,8 @@ class LineGate:
         self.cfg = cfg or GateConfig()
         self._pending_text = ""
         self._pending_count = 0
+        self._last_frame = ""
+        self._frozen_streak = 0
         self._seen: deque[str] = deque(maxlen=max(1, self.cfg.dedupe_window))
         self._seen_set: set[str] = set()
         self.skipped: deque[dict[str, str]] = deque(maxlen=self.SKIP_LOG_LIMIT)
@@ -151,6 +179,8 @@ class LineGate:
 
         self._pending_text = ""
         self._pending_count = 0
+        self._last_frame = ""
+        self._frozen_streak = 0
 
     def hard_reset(self) -> None:
         self.reset()
@@ -168,6 +198,10 @@ class LineGate:
             # 空帧（转场/立绘切换）不打断稳定计数：瞬时误读不应吃掉窗口
             return None
 
+        frozen = text == self._last_frame
+        self._last_frame = text
+        self._frozen_streak = self._frozen_streak + 1 if frozen else 1
+
         if self._pending_text and (
             text == self._pending_text
             or similarity(text, self._pending_text) >= self.cfg.similarity_threshold
@@ -179,7 +213,7 @@ class LineGate:
             self._pending_text = text
             self._pending_count = 1
 
-        if self._pending_count < self.cfg.stable_frames:
+        if not self._is_settled(text):
             return None
 
         candidate = self._pending_text
@@ -193,11 +227,39 @@ class LineGate:
         self._consume(h)
         self._pending_text = ""
         self._pending_count = 0
+        self._last_frame = ""
+        self._frozen_streak = 0
 
         if reason:
             self._record_skip(candidate, reason)
             return None
         return line
+
+    # ------------------------------------------------------------------
+
+    def _is_settled(self, text: str) -> bool:
+        """候选是否可判定为「定型」（模块 docstring 第 2 条的打字机防线）。"""
+
+        cfg = self.cfg
+        need = cfg.stable_frames
+        if not cfg.punctuation_priority:
+            return self._pending_count >= need  # v0.2.1 行为：纯 N 帧相似链窗口
+
+        frozen_need = 1 if need <= 1 else 2
+        # 兜底：OCR 系统性抖字导致永不「完全一致」时，相似链够长也得放行，
+        # 否则整句永远读不出来。
+        chain_rescue = self._pending_count >= need + STUCK_EXTRA_FRAMES
+        if ends_with_sentence_end(text, cfg.sentence_end_chars):
+            # 句末标点优先：冻结 2 帧即播，不吃 stable_frames 的 N
+            return self._frozen_streak >= frozen_need or chain_rescue
+        # 未命中句读：增长链可以攒，但开口前文本必须真的停止变化（冻结）；
+        # 否则只是把「半句卡帧提前播」的机会还给旧 bug。need<=2 时与旧版
+        # 对静止文本行为一致（冻结 2 帧 = 相似链 2 帧），差别只在增长中。
+        return (
+            self._frozen_streak >= frozen_need
+            and self._pending_count >= need
+            or chain_rescue
+        )
 
     # ------------------------------------------------------------------
 

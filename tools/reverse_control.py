@@ -10,6 +10,14 @@ import sys
 import tomllib
 from pathlib import Path
 
+# 与 release_gate 同源：Windows GBK 控制台下 summary 的 emoji 会炸 traceback，
+# 统一码面 UTF-8 + 容忍不可编码字符（v0.2.2 反向对照实测踩中）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):  # 已被重定向/替换过的流
+        pass
+
 ROOT = Path(__file__).resolve().parents[1]
 CUR_VERSION = tomllib.loads((ROOT / "plugin.toml").read_text(encoding="utf-8"))["plugin"]["version"]
 FILES = ["ui/panel.tsx", "__init__.py", "i18n/zh-CN.json", "i18n/en.json", "pyproject.toml"]

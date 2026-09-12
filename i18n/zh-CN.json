@@ -33,6 +33,7 @@
   "fields.line": "台词文本",
   "fields.pollInterval": "轮询间隔（毫秒）",
   "fields.protagonistNames": "主角名（逗号分隔）",
+  "fields.punctuationPriority": "句末标点优先",
   "fields.slowPollUnfocused": "失焦降频轮询",
   "fields.stableFrames": "稳定帧数",
   "fields.uiWords": "UI 屏蔽词（逗号分隔）",

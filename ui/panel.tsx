@@ -64,6 +64,7 @@ type State = {
   settings?: {
     poll_interval_ms?: number
     stable_frames?: number
+    punctuation_priority?: boolean
     dub_protagonist?: boolean
     dub_monologue?: boolean
     pause_on_user_message?: boolean
@@ -171,6 +172,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
   const [form, setForm] = useState({
     poll_interval_ms: 900,
     stable_frames: 2,
+    punctuation_priority: true,
     dub_protagonist: false,
     dub_monologue: true,
     pause_on_user_message: true,
@@ -185,6 +187,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
     setForm({
       poll_interval_ms: Number(s.poll_interval_ms || 900),
       stable_frames: Number(s.stable_frames || 2),
+      punctuation_priority: s.punctuation_priority !== false,
       dub_protagonist: Boolean(s.dub_protagonist),
       dub_monologue: s.dub_monologue !== false,
       pause_on_user_message: s.pause_on_user_message !== false,
@@ -202,6 +205,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
         patch: {
           poll_interval_ms: Number(form.poll_interval_ms),
           stable_frames: Number(form.stable_frames),
+          punctuation_priority: Boolean(form.punctuation_priority),
           dub_protagonist: Boolean(form.dub_protagonist),
           dub_monologue: Boolean(form.dub_monologue),
           pause_on_user_message: Boolean(form.pause_on_user_message),
@@ -231,9 +235,11 @@ export default function Panel(props: PluginSurfaceProps<State>) {
     }
   }, [surfaceApi, feedText, t, toast])
 
-  const call = useCallback(async (entry: string, args?: Record<string, any>) => {
+  // options 透传给宿主桥（超时链：HTTP 下载 240s < 入口 300s < 面板 deadline；
+  // 宿主桥默认 30s，长任务必须显式传 timeoutMs，否则服务端还在跑前端先掉镖）
+  const call = useCallback(async (entry: string, args?: Record<string, any>, options?: { timeoutMs?: number }) => {
     try {
-      await surfaceApi.call(entry, args || {})
+      await surfaceApi.call(entry, args || {}, options)
       await surfaceApi.refresh()
     } catch (e) {
       toast.error(errorText(e, t))
@@ -374,6 +380,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
             <Switch label={t("fields.dubProtagonist", { defaultValue: "朗读主角台词" })} checked={form.dub_protagonist} onChange={(v: any) => patch("dub_protagonist", v)} />
             <Switch label={t("fields.dubMonologue", { defaultValue: "朗读内心独白" })} checked={form.dub_monologue} onChange={(v: any) => patch("dub_monologue", v)} />
             <Switch label={t("fields.pauseOnUser", { defaultValue: "主人说话时自动暂停" })} checked={form.pause_on_user_message} onChange={(v: any) => patch("pause_on_user_message", v)} />
+            <Switch label={t("fields.punctuationPriority", { defaultValue: "句末标点优先" })} checked={form.punctuation_priority} onChange={(v: any) => patch("punctuation_priority", v)} />
             <Switch label={t("fields.slowPollUnfocused", { defaultValue: "失焦降频轮询" })} checked={form.slow_poll_when_unfocused} onChange={(v: any) => patch("slow_poll_when_unfocused", v)} />
             <Field label={t("fields.protagonistNames", { defaultValue: "主角名（逗号分隔）" })}>
               <Input value={form.protagonist_names} onChange={(v: any) => patch("protagonist_names", typeof v === "string" ? v : v?.target?.value || "")} />
@@ -416,7 +423,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
           <Grid cols={2}>
             {/* 测试句是给宿主 TTS 的语料（数据），不是界面文案 → 保持中文原样 */}
             <Button onClick={() => call("test_speak", { line: "配音通道测试，一。配音通道测试，二。" })}>{t("actions.testSpeak", { defaultValue: "试听播报" })}</Button>
-            <Button onClick={() => call("ocr_download")}>{t("actions.ocrModels", { defaultValue: "下载其它语言模型" })}</Button>
+            <Button onClick={() => call("ocr_download", {}, { timeoutMs: 315000 })}>{t("actions.ocrModels", { defaultValue: "下载其它语言模型" })}</Button>
           </Grid>
           <Text>{t("panel.ocrHint", { defaultValue: "默认中文 v4 模型已随包内置，无需下载；仅当切换 [ocr] 语言/版本时才需要。" })}</Text>
         </Stack>

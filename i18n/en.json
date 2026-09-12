@@ -33,6 +33,7 @@
   "fields.line": "Dialogue text",
   "fields.pollInterval": "Poll interval (ms)",
   "fields.protagonistNames": "Protagonist names (comma-separated)",
+  "fields.punctuationPriority": "Sentence-ending punctuation priority",
   "fields.slowPollUnfocused": "Slow polling when unfocused",
   "fields.stableFrames": "Stable frames",
   "fields.uiWords": "UI block words (comma-separated)",

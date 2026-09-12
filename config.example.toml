@@ -9,6 +9,10 @@ poll_interval_ms = 900
 idle_poll_interval_ms = 2500
 stable_frames = 2
 similarity_threshold = 0.9
+# 句末标点优先：句读结尾冻结 2 帧即播；未命中的要求末两帧完全一致（防半句）
+punctuation_priority = true
+# 句末标点集；留空 = 只保留防半句的冻结铁律，不提前定型
+sentence_end_chars = "。！？!?…」』"
 dedupe_window = 64
 min_significant_chars = 2
 max_line_chars = 220

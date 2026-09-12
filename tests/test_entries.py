@@ -49,10 +49,13 @@ async def test_update_settings_whitelist_and_apply(cs_make_plugin, cs_err, cs_ok
     plugin = cs_make_plugin()
     bad = await plugin.update_settings(patch={"nope": 1})
     assert isinstance(bad, cs_err)
-    ok = await plugin.update_settings(patch={"stable_frames": "3", "dub_monologue": False})
+    ok = await plugin.update_settings(
+        patch={"stable_frames": "3", "dub_monologue": False, "punctuation_priority": False}
+    )
     assert isinstance(ok, cs_ok)
     assert plugin._cfg["dub"]["stable_frames"] == 3
     assert plugin._gate.cfg.dub_monologue is False
+    assert plugin._gate.cfg.punctuation_priority is False
 
 
 async def test_feed_line_rejects_empty(cs_make_plugin, cs_err):

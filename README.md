@@ -9,7 +9,9 @@
 
 - 控制：面板按钮 / `@llm_tool`（start/stop/pause/resume/status，纯聊天可完成
   全部操作，无需碰面板）/ 手动投喂一行直接朗读
-- 判定：连续 N 帧文本稳定才播（抗打字机半句）；最近 64 条 hash 去重（防翻页重播）；
+- 判定：连续 N 帧文本稳定才播（抗打字机半句）；句末标点优先（默认开）：
+  定型以末两帧完全一致为前提堵死增长中半句开口，句读结尾冻结 2 帧即播；
+  最近 64 条 hash 去重（防翻页重播）；
   主角台词（`dub_protagonist`）与内心独白（`dub_monologue`）可分别开关
 - 抓取：PrintWindow 直接渲染目标窗口本体——**不受其它窗口遮挡、多屏坐标
   影响**，失败自动回退桌面截屏；几何以 DWM 可见边框为准，预览框选不再错位
@@ -72,6 +74,13 @@ uv run python tools/reverse_control.py              # 契约门反向对照（�
 > `ui/panel.tsx` 的类型错误（错误 props 名会被运行时静默丢弃，不报错但默默坏
 > 布局）只能靠 hosted-tsx 门在本地/发版前拦。v0.1–v0.2 就是这么带病发布过一轮，
 > 勿回退这道门。
+
+> 坑位存档：超时链实测同源（v0.2.2）：面板「下载语言模型」的真实卡点不在宿主
+> 网关而在宿主桥默认 deadline——`surfaceApi.call` 不传 `timeoutMs` 时前端 30s
+> 就掉镖（后端还在跑）。现行链：HTTP 下载 240s < `ocr_download` 入口 300s
+> （宿主 `host.trigger` 按入口声明的 meta.timeout 等待，不是
+> `NEKO_PLUGIN_TRIGGER_TIMEOUT` 的 10s 默认）< 面板显式 315s。新增长任务
+> 入口必须同点传 `{ timeoutMs: 入口上限 + 余量 }`，否则又是带病发布。
 
 Python runtime dependencies are declared in `pyproject.toml` and synced into
 `vendor/` for packaging. The generated `vendor/` directory is not committed;
