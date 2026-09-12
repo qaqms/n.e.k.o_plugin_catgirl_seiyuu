@@ -23,6 +23,9 @@ lanlan_name = ""
 speak_timeout_s = 120
 main_server_port = 0
 speak_game_type = "catgirl_seiyuu"
+# 默认目标（当前前台）命中关键字时拒绝开启配音（防嗘自己聊天记录的回声回路）
+exclude_host_window = true
+host_window_keywords = ["N.E.K.O"]
 
 [ocr]
 engine_type = "onnxruntime"

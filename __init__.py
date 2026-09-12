@@ -62,6 +62,10 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "speak_timeout_s": 120,
         "main_server_port": 0,
         "speak_game_type": PLUGIN_ID,
+        # 默认目标（前台窗口）命中宿主标题关键字时直接拒绝：防止「朗读
+        # 自己聊天记录」的回声回路（OCR 读聊天气泡 → TTS 播报 → 新气泡…）。
+        "exclude_host_window": True,
+        "host_window_keywords": ["N.E.K.O"],
     },
     "ocr": {
         "engine_type": "onnxruntime",
@@ -91,7 +95,47 @@ _DUB_PATCH_TYPES: dict[str, type] = {
     "speak_timeout_s": float,
     "main_server_port": int,
     "speak_game_type": str,
+    "exclude_host_window": bool,
+    "host_window_keywords": list,
 }
+
+
+def _coerce_value(default: Any, value: Any) -> Any:
+    """按出厂默认值的类型夹紧运行时配置；转不动就回落默认。
+
+    运行时 config 可被手工编辑成任意形状（错类型/嵌套/None），不能让
+    垃圾值穿透到 int()/float() 现场把 startup 或轮询循环打死。
+    """
+
+    if isinstance(default, bool):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return default
+    if isinstance(default, int):
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            return default
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+    if isinstance(default, float):
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+    if isinstance(default, str):
+        return value if isinstance(value, str) else default
+    if isinstance(default, list):
+        if not isinstance(value, (list, tuple)):
+            return default
+        return [str(item) for item in value]
+    return value
 
 
 @neko_plugin
@@ -144,6 +188,16 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
                         continue
                     if value is not None:
                         values[key] = value
+        # 消毒层：任何来源（手工编辑的 toml / 坏缓存）的非法类型回落默认
+        for section, values in cfg.items():
+            for key, default in DEFAULTS.get(section, {}).items():
+                raw = values.get(key, default)
+                fixed = _coerce_value(default, raw)
+                if fixed != raw:
+                    self.logger.warning(
+                        "config {}.{} 值非法（{!r}），回退出厂默认", section, key, raw
+                    )
+                values[key] = fixed
         return cfg
 
     def _apply_config(self) -> None:
@@ -223,6 +277,7 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
                 await asyncio.sleep(self._tick_interval_s())
                 if not self._mode.is_running():
                     continue
+                self._supervise_worker()
                 await self._tick_once()
             except asyncio.CancelledError:
                 raise
@@ -283,13 +338,18 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
                 return
 
     async def _speak_worker(self) -> None:
-        """串行播报协程：一句播完（宿主同步回执）才取下一句。"""
+        """串行播报协程：一句播完（宿主同步回执）才取下一句。
 
-        dub = self._cfg["dub"]
+        每句开工前重读 self._cfg["dub"]：update_settings 立即生效。
+        曾因在循环外快照一次配置，运行中改 lanlan_name/mirror_text/超时
+        全部无效，直到下次 stop/start。
+        """
+
         while True:
             line = await self._queue.get()
             if not self._mode.is_running():
                 continue
+            dub = self._cfg["dub"]
             self._current_line = line
             try:
                 result = await self._host.speak(
@@ -406,18 +466,45 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
     # 运行时入口（面板动作 / 跨插件调用）
     # ==================================================================
 
-    def _resolve_target_sync(self, hwnd: int, title: str) -> tuple[int, str]:
-        """hwnd 指定 → 校验在位；title 指定 → 按标题精确匹配；否则当前前台。"""
+    # 目标解析失败码 → 用户可读文案（面板/LLM 渠道都会看到）
+    _TARGET_ERRORS: dict[str, str] = {
+        "invalid_hwnd": "目标窗口已失效（可能已关闭），请在面板重新选择窗口",
+        "title_not_found": "找不到标题匹配的目标窗口",
+        "target_is_self": (
+            "前台是 N.E.K.O 自己的窗口：请先切到游戏窗口再试，或在面板里指定目标窗口"
+            "（可在 [dub] exclude_host_window 关闭此保护）"
+        ),
+    }
+
+    def _resolve_target_sync(self, hwnd: int, title: str) -> tuple[int, str, str]:
+        """解析配音目标，返回 (hwnd, title, err_reason)；err_reason 非空即失败。
+
+        纪律：显式指定的 hwnd/title 解析失败时**必须报错**，不再静默回退
+        前台——旧行为在面板选中失探窗口后把宿主自己的聊天窗口喂进 OCR，
+        形成「朗读自己」的回声回路。仅当两者都未指定（llm 渠道默认开启）
+        才取前台窗口，且默认排除命中宿主标题关键字的窗口。
+        """
 
         if hwnd:
             if capture.is_window_valid(int(hwnd)):
-                return int(hwnd), capture.window_title(int(hwnd))
+                return int(hwnd), capture.window_title(int(hwnd)), ""
+            return 0, "", "invalid_hwnd"
         if title:
             for win in capture.list_windows():
                 if win.get("title") == title:
-                    return int(win["hwnd"]), str(win["title"])
+                    return int(win["hwnd"]), str(win["title"]), ""
+            return 0, "", "title_not_found"
         info = capture.foreground_window_info()
-        return int(info.get("hwnd") or 0), str(info.get("title") or "")
+        fg_hwnd = int(info.get("hwnd") or 0)
+        fg_title = str(info.get("title") or "")
+        dub = self._cfg["dub"]
+        if fg_hwnd and bool(dub.get("exclude_host_window", True)):
+            keywords = [str(k) for k in dub.get("host_window_keywords", []) or [] if str(k)]
+            lowered = fg_title.casefold()
+            for keyword in keywords:
+                if keyword.casefold() in lowered:
+                    return 0, "", "target_is_self"
+        return fg_hwnd, fg_title, ""
 
     @ui.action(label=tr("actions.start", default="Start dubbing"), tone="primary")
     @plugin_entry(
@@ -436,9 +523,11 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
     async def dub_start(self, hwnd: int = 0, title: str = "", **_):
         if not capture.supported():
             return Err(SdkError(f"v0.1 仅支持 Windows 桌面截屏（当前 {capture.platform_reason()}）"))
-        resolved_hwnd, resolved_title = await asyncio.to_thread(self._resolve_target_sync, int(hwnd or 0), str(title or ""))
+        resolved_hwnd, resolved_title, err_reason = await asyncio.to_thread(
+            self._resolve_target_sync, int(hwnd or 0), str(title or "")
+        )
         if not resolved_hwnd:
-            return Err(SdkError("找不到目标窗口"))
+            return Err(SdkError(self._TARGET_ERRORS.get(err_reason) or "找不到目标窗口"))
         self._target_hwnd = resolved_hwnd
         self._target_title = resolved_title
         self._gate.reset()
@@ -457,6 +546,23 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
     def _ensure_worker(self) -> None:
         if self._speak_task is None or self._speak_task.done():
             self._speak_task = asyncio.create_task(self._speak_worker())
+
+    def _supervise_worker(self) -> None:
+        """配音运行中监管播报 worker：意外死亡 → 记日志并重启。
+
+        没有这一层时 worker 崩溃 = 队列只进不出，配音静默卡死且面板
+        看不出异常（状态仍显示 running）。
+        """
+
+        task = self._speak_task
+        if task is not None and task.done() and not task.cancelled():
+            try:
+                exc = task.exception()
+            except asyncio.CancelledError:
+                exc = None
+            if exc is not None:
+                self.logger.warning("speak worker 意外终止，已重启：{}", exc)
+        self._ensure_worker()
 
     @ui.action(label=tr("actions.stop", default="Stop dubbing"))
     @plugin_entry(id="dub_stop", name=tr("entries.stop.name", default="停止配音"), description="停止配音模式并清空待播队列。")
@@ -516,9 +622,9 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
     async def capture_preview(self, hwnd: int = 0, **_):
         if not capture.supported():
             return Err(SdkError(capture.platform_reason() or "capture_unsupported"))
-        target, title = await asyncio.to_thread(self._resolve_target_sync, int(hwnd or 0), "")
+        target, title, err_reason = await asyncio.to_thread(self._resolve_target_sync, int(hwnd or 0), "")
         if not target:
-            return Err(SdkError("没有可截取的窗口"))
+            return Err(SdkError(self._TARGET_ERRORS.get(err_reason) or "没有可截取的窗口"))
         try:
             img = await asyncio.to_thread(capture.grab_window, target)
         except RuntimeError as exc:
@@ -645,9 +751,9 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
     async def test_capture(self, hwnd: int = 0, **_):
         if not capture.supported():
             return Err(SdkError(capture.platform_reason() or "capture_unsupported"))
-        target, _title = await asyncio.to_thread(self._resolve_target_sync, int(hwnd or 0), "")
+        target, _title, err_reason = await asyncio.to_thread(self._resolve_target_sync, int(hwnd or 0), "")
         if not target:
-            return Err(SdkError("没有可截取的窗口"))
+            return Err(SdkError(self._TARGET_ERRORS.get(err_reason) or "没有可截取的窗口"))
         try:
             img = await asyncio.to_thread(capture.grab_window, target)
             img = await asyncio.to_thread(capture.crop_region, img, self._cfg["region"])

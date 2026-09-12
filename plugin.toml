@@ -4,7 +4,7 @@ name = "猫娘声优"
 description = "让猫娘用她本人的声音逐字朗读游戏台词：外部截屏 + OCR 读字（不触碰游戏进程，零封号风险），台词稳定/去重后经宿主 TTS 管线逐句播报，一句播完再播下一句。一句「打开配音模式」即可开始，主人说话自动暂停。"
 short_description = "Catgirl voices visual-novel dialogue line by line via screen OCR and host TTS; zero game injection."
 keywords = ["配音", "声优", "朗读", "dub", "dubbing", "voice", "galgame", "视觉小说", "visual novel", "文字冒险", "OCR", "截屏", "猫娘"]
-version = "0.1.0"
+version = "0.1.1"
 type = "plugin"
 entry = "plugin.plugins.catgirl_seiyuu:CatgirlSeiyuuPlugin"
 
@@ -85,6 +85,11 @@ speak_timeout_s = 120
 main_server_port = 0
 # speak 路由 game_type（B 层契约路径参数，一般不需要改）
 speak_game_type = "catgirl_seiyuu"
+# 默认目标（当前前台）命中下方关键字时拒绝开启配音：防止猫娘朗读自己的
+# 聊天记录形成回声回路。显式选择窗口/按标题匹配不受影响。
+exclude_host_window = true
+# 宿主窗口标题关键字（子串匹配，忽略大小写）；改名/本地化窗口标题时自行追加
+host_window_keywords = ["N.E.K.O"]
 
 # ---------------------------------------------------------------- OCR 引擎
 [ocr]

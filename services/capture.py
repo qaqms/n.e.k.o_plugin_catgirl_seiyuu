@@ -19,6 +19,40 @@ from typing import Any
 
 IS_WINDOWS = sys.platform == "win32"
 
+_DPI_AWARE_DONE = False
+
+
+def ensure_dpi_aware() -> None:
+    """把本进程钉为 DPI aware（per-monitor v2 优先，逐级降级）。
+
+    未声明 awareness 的进程里 GetWindowRect 拿到的是系统虚拟化的**逻辑**
+    坐标，而 Pillow 的 ImageGrab 会自行把进程切成 DPI aware 后按**物理**
+    像素拓图——缩放慢率 >100% 时两套坐标系先后不一致，截到的区域和窗口
+    错位。首次取图前显式统一，后续 rect/抓取恒为物理像素。best-effort。
+    """
+
+    global _DPI_AWARE_DONE
+    if _DPI_AWARE_DONE or not IS_WINDOWS:
+        return
+    _DPI_AWARE_DONE = True
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        try:  # Win10 1703+：PROCESS_PER_MONITOR_DPI_AWARE_V2
+            if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):  # type: ignore[attr-defined]
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        try:  # Win8.1+
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # type: ignore[attr-defined]
+            return
+        except Exception:  # noqa: BLE001
+            pass
+        user32.SetProcessDPIAware()  # type: ignore[attr-defined]  # Vista+
+    except Exception:  # noqa: BLE001 - 失败保持系统默认行为
+        pass
+
 
 def supported() -> bool:
     return IS_WINDOWS
@@ -88,6 +122,7 @@ def get_window_rect(hwnd: int) -> tuple[int, int, int, int] | None:
 
     if not IS_WINDOWS or not hwnd:
         return None
+    ensure_dpi_aware()
     import ctypes
 
     class RECT(ctypes.Structure):
@@ -131,6 +166,7 @@ def list_windows() -> list[dict[str, Any]]:
 
     if not IS_WINDOWS:
         return []
+    ensure_dpi_aware()
     import ctypes
 
     results: list[dict[str, Any]] = []
@@ -180,6 +216,7 @@ def grab_window(hwnd: int) -> Any:
 
 
 def grab_rect(rect: tuple[int, int, int, int]) -> Any:
+    ensure_dpi_aware()
     try:
         from PIL import ImageGrab
     except Exception as exc:  # noqa: BLE001
