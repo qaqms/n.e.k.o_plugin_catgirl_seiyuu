@@ -57,6 +57,22 @@ uv run --project "../N.E.K.O" neko-plugin check .
 uv run --project "../N.E.K.O" neko-plugin check -r .
 ```
 
+发版前把本仓的门一次跑完（五门：pytest / ruff / check / release（挂载态复刻
+市场 CI）/ hosted-tsx）：
+
+发布前一次性跑完本仓库的门（五个门禁：pytest / ruff / check / release（挂载状态，用于复现市场 CI）/ hosted-tsx）：
+
+```bash
+uv run python tools/release_gate.py                 # 全跑，任一红即非零退出
+uv run python tools/release_gate.py --only hosted-tsx,release
+uv run python tools/reverse_control.py              # 契约门反向对照（逐门必红）
+```
+
+> 坑位存档：市场 CI verify 只跑 ruff + `check -r`，**不跑面板 TS 类型检查**——
+> `ui/panel.tsx` 的类型错误（错误 props 名会被运行时静默丢弃，不报错但默默坏
+> 布局）只能靠 hosted-tsx 门在本地/发版前拦。v0.1–v0.2 就是这么带病发布过一轮，
+> 勿回退这道门。
+
 Python runtime dependencies are declared in `pyproject.toml` and synced into
 `vendor/` for packaging. The generated `vendor/` directory is not committed;
 local builds and CI recreate it before release checks.

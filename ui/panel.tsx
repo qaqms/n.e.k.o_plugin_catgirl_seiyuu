@@ -1,5 +1,13 @@
 // 猫娘声优面板：模式控制 / 目标窗口与区域框选 / 规则设置 / 跳过记录 / 调试通道。
 // Hosted TSX：只从 @neko/plugin-ui 导入；业务全在 Python 侧。
+//
+// i18n 契约（与 forever_companion 主项 #10 同源）：
+// - 用户可见文案一律走 t(key, { defaultValue })，zh-CN bundle 与 defaultValue
+//   逐字同源（tests/test_i18n_contract.py 常驻门钉住）；
+// - 面板可达入口的 Err 消息只接受稳定 ASCII 码（^[a-z][a-z0-9_]*$），由
+//   errorText() 按 panel.errors.<camelCase(码)> 翻译；非码文本（宿主自身错误、
+//   超时等）原样直出；
+// - 给模型的指令（llm_tool note / HUD 文案）在 Python 侧，不走本文件。
 import {
   Alert,
   Button,
@@ -23,12 +31,28 @@ import {
 } from "@neko/plugin-ui"
 import type { PluginSurfaceProps } from "@neko/plugin-ui"
 
+const ERROR_CODE_RE = /^[a-z][a-z0-9_]*$/
+
+function codeToCamel(code: string): string {
+  return code.replace(/_+([a-z0-9])/g, (_m, c: string) => c.toUpperCase())
+}
+
+function errorText(raw: unknown, t: (key: string, opts?: Record<string, any>) => string): string {
+  const msg = raw instanceof Error ? raw.message : String(raw == null ? "" : raw)
+  if (ERROR_CODE_RE.test(msg)) {
+    // defaultValue 给码本身：新码忘了进 bundle 时退化为英文码（可排查），
+    // 而不是把某一语言的裸串直喷给所有用户。
+    return t(`panel.errors.${codeToCamel(msg)}`, { defaultValue: msg })
+  }
+  return msg
+}
+
 type SkipEntry = { text: string; reason: string }
 
 type State = {
   mode?: string
   paused_reason?: string
-  target?: { hwnd?: number; title?: string }
+  target?: { hwnd?: number; title?: string; process?: string; minimized?: boolean }
   focus?: boolean
   capture_supported?: boolean
   current_line?: string
@@ -48,7 +72,6 @@ type State = {
     ui_words?: string[]
     capture_mode?: string
   }
-  target?: { hwnd?: number; title?: string; process?: string; minimized?: boolean }
   skipped?: SkipEntry[]
   ocr?: { available?: boolean; initialized?: boolean; error?: string; lang_type?: string; ocr_version?: string }
 }
@@ -64,14 +87,8 @@ type WindowItem = {
   is_self?: boolean
 }
 
-const MODE_LABEL: Record<string, string> = {
-  off: "未开启",
-  running: "配音中",
-  paused: "已暂停",
-}
-
 export default function Panel(props: PluginSurfaceProps<State>) {
-  const { t, state, api } = props
+  const { t, state, api: surfaceApi } = props
   const toast = useToast()
 
   // ---- 目标窗口列表 ----
@@ -81,12 +98,12 @@ export default function Panel(props: PluginSurfaceProps<State>) {
 
   const refreshWindows = useCallback(async () => {
     try {
-      const res = await api.call("dub_windows")
+      const res = await surfaceApi.call("dub_windows")
       setWindows((res?.windows || []) as WindowItem[])
     } catch (e) {
-      toast.error(String(e))
+      toast.error(errorText(e, t))
     }
-  }, [api, toast])
+  }, [surfaceApi, t, toast])
 
   // ---- 预览 + 区域框选 ----
   const [preview, setPreview] = useState<{ image_b64: string; width: number; height: number } | null>(null)
@@ -100,14 +117,14 @@ export default function Panel(props: PluginSurfaceProps<State>) {
   const grabPreview = useCallback(async () => {
     try {
       const hwnd = selectedHwnd ? Number(selectedHwnd) : 0
-      const res = await api.call("capture_preview", { hwnd })
+      const res = await surfaceApi.call("capture_preview", { hwnd })
       setPreview({ image_b64: res.image_b64, width: res.width, height: res.height })
       setDrag(null)
       setPending(null)
     } catch (e) {
-      toast.error(`截取失败：${e}`)
+      toast.error(t("panel.toast.grabFailed", { defaultValue: "截取失败：{error}", error: errorText(e, t) }))
     }
-  }, [api, selectedHwnd, toast])
+  }, [surfaceApi, selectedHwnd, t, toast])
 
   const relPoint = (ev: any) => {
     const el = imgRef.current
@@ -140,14 +157,14 @@ export default function Panel(props: PluginSurfaceProps<State>) {
   const saveRegion = useCallback(async () => {
     const r = pending || region
     try {
-      await api.call("set_region", { x: r.x, y: r.y, w: r.w, h: r.h })
-      toast.success("区域已保存")
+      await surfaceApi.call("set_region", { x: r.x, y: r.y, w: r.w, h: r.h })
+      toast.success(t("panel.toast.regionSaved", { defaultValue: "区域已保存" }))
       setPending(null)
-      await api.refresh()
+      await surfaceApi.refresh()
     } catch (e) {
-      toast.error(String(e))
+      toast.error(errorText(e, t))
     }
-  }, [api, pending, region, toast])
+  }, [surfaceApi, pending, region, t, toast])
 
   // ---- 设置表单 ----
   const s = state.settings || {}
@@ -181,7 +198,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
 
   const saveSettings = useCallback(async () => {
     try {
-      await api.call("update_settings", {
+      await surfaceApi.call("update_settings", {
         patch: {
           poll_interval_ms: Number(form.poll_interval_ms),
           stable_frames: Number(form.stable_frames),
@@ -194,36 +211,51 @@ export default function Panel(props: PluginSurfaceProps<State>) {
           capture_mode: String(form.capture_mode || "auto"),
         },
       })
-      toast.success("设置已保存并生效")
-      await api.refresh()
+      toast.success(t("panel.toast.settingsSaved", { defaultValue: "设置已保存并生效" }))
+      await surfaceApi.refresh()
     } catch (e) {
-      toast.error(String(e))
+      toast.error(errorText(e, t))
     }
-  }, [api, form, toast])
+  }, [surfaceApi, form, t, toast])
 
   // ---- 手动投喂 / 调试 ----
   const [feedText, setFeedText] = useState("")
   const feed = useCallback(async () => {
     if (!feedText.trim()) return
     try {
-      await api.call("feed_line", { line: feedText.trim() })
+      await surfaceApi.call("feed_line", { line: feedText.trim() })
       setFeedText("")
-      toast.success("已交给猫娘朗读")
+      toast.success(t("panel.toast.fed", { defaultValue: "已交给猫娘朗读" }))
     } catch (e) {
-      toast.error(String(e))
+      toast.error(errorText(e, t))
     }
-  }, [api, feedText, toast])
+  }, [surfaceApi, feedText, t, toast])
 
   const call = useCallback(async (entry: string, args?: Record<string, any>) => {
     try {
-      await api.call(entry, args || {})
-      await api.refresh()
+      await surfaceApi.call(entry, args || {})
+      await surfaceApi.refresh()
     } catch (e) {
-      toast.error(String(e))
+      toast.error(errorText(e, t))
     }
-  }, [api, toast])
+  }, [surfaceApi, t, toast])
 
   const mode = state.mode || "off"
+  const modeLabel = mode === "running"
+    ? t("panel.modeLabel.running", { defaultValue: "配音中" })
+    : mode === "paused"
+      ? t("panel.modeLabel.paused", { defaultValue: "已暂停" })
+      : t("panel.modeLabel.off", { defaultValue: "未开启" })
+  const pauseReason = state.paused_reason === "user"
+    ? t("panel.pauseReason.user", { defaultValue: "主人发言" })
+    : state.paused_reason === "manual"
+      ? t("panel.pauseReason.manual", { defaultValue: "手动" })
+      : state.paused_reason === "conflict"
+        ? t("panel.pauseReason.conflict", { defaultValue: "语音通道被占用" })
+        : state.paused_reason === "error"
+          ? t("panel.pauseReason.error", { defaultValue: "异常" })
+          : state.paused_reason || ""
+
   // 全量窗口交给面板过滤：按标题/进程名/句柄搜索，前台窗口带 ★、最小化带 [min]。
   const filterKeys = windowFilter.trim().toLowerCase().split(/\s+/).filter(Boolean)
   const filteredWindows = filterKeys.length
@@ -233,51 +265,65 @@ export default function Panel(props: PluginSurfaceProps<State>) {
       })
     : windows
   const windowOptions = filteredWindows.slice(0, 30).map((w) => ({
-    label: `${w.focused ? "★ " : ""}${w.minimized ? "[min] " : ""}${w.label || w.title || String(w.hwnd)}${w.process ? ` — ${w.process}` : ""}`,
+    label: `${w.focused ? "★ " : ""}${w.minimized ? "[min] " : ""}${w.label || w.title || String(w.hwnd)}${w.process ? ` - ${w.process}` : ""}`,
     value: String(w.hwnd),
   }))
 
-  return (
-    <Page title={props.plugin.name} subtitle={t("panel.subtitle")}>
-      {(state.last_error && <Alert tone="warning">{state.last_error}</Alert>) || null}
-      {(state.last_mode_hint && <Alert tone="info">{state.last_mode_hint}</Alert>) || null}
+  const tgt = state.target
+  const ocr = state.ocr
 
-      <Card title={t("panel.mode")}>
-        <Grid columns={4}>
-          <StatCard label="状态" value={<StatusBadge text={`${MODE_LABEL[mode] || mode}${mode === "paused" && state.paused_reason ? `（${state.paused_reason}）` : ""}`} tone={mode === "running" ? "success" : mode === "paused" ? "warning" : "neutral"} />} />
-          <StatCard label="已播句数" value={String(state.spoken ?? 0)} />
-          <StatCard label="待播队列" value={String(state.queue_size ?? 0)} />
-          <StatCard label="焦点" value={state.focus ? "前台" : mode === "running" ? "失焦降频" : "—"} />
+  return (
+    <Page title={props.plugin.name} subtitle={t("panel.subtitle", { defaultValue: "让猫娘用她本人的声音逐字朗读游戏台词。" })}>
+      {(state.last_error && <Alert tone="warning">{errorText(state.last_error, t)}</Alert>) || null}
+      {(state.last_mode_hint && <Alert tone="info">{t("panel.hint.lastMode", { defaultValue: "上次退出时处于配音模式；为不打扰主人，本次未自动恢复。" })}</Alert>) || null}
+
+      <Card title={t("panel.mode", { defaultValue: "模式" })}>
+        <Grid cols={4}>
+          <StatCard label={t("panel.stat.status", { defaultValue: "状态" })} value={<StatusBadge label={`${modeLabel}${mode === "paused" && pauseReason ? `（${pauseReason}）` : ""}`} tone={mode === "running" ? "success" : mode === "paused" ? "warning" : "default"} />} />
+          <StatCard label={t("panel.stat.lines", { defaultValue: "已播句数" })} value={String(state.spoken ?? 0)} />
+          <StatCard label={t("panel.stat.queue", { defaultValue: "待播队列" })} value={String(state.queue_size ?? 0)} />
+          <StatCard label={t("panel.stat.focus", { defaultValue: "焦点" })} value={state.focus ? t("panel.stat.foreground", { defaultValue: "前台" }) : mode === "running" ? t("panel.stat.slowPoll", { defaultValue: "失焦降频" }) : "-"} />
         </Grid>
-        <Text>{state.target?.title || state.target?.process ? `目标：${state.target.title || state.target.label || ""}${state.target.process ? `（${state.target.process}）` : ""}${state.target.minimized ? " · 已最小化" : ""}` : "未选择目标窗口（默认前台窗口）"}</Text>
-        {(state.current_line && <Text>正在朗读：{state.current_line}</Text>) || null}
+        <Text>
+          {tgt?.title || tgt?.process
+            ? t("panel.target.current", {
+                defaultValue: "目标：{name}{process}{minimized}",
+                name: tgt.title || "",
+                process: tgt.process ? t("panel.target.process", { defaultValue: "（{process}）", process: tgt.process }) : "",
+                minimized: tgt.minimized ? t("panel.target.minimized", { defaultValue: " · 已最小化" }) : "",
+              })
+            : t("panel.target.none", { defaultValue: "未选择目标窗口（默认跟随前台）" })}
+        </Text>
+        {(state.current_line && <Text>{t("panel.speaking", { defaultValue: "正在朗读：{line}", line: state.current_line })}</Text>) || null}
       </Card>
 
-      <Card title={t("panel.controls")}>
+      <Card title={t("panel.controls", { defaultValue: "控制" })}>
         <Stack>
-          <Grid columns={4}>
-            <Button tone="primary" onClick={() => call("dub_start", { hwnd: selectedHwnd ? Number(selectedHwnd) : 0 })}>{t("actions.start")}</Button>
-            <Button onClick={() => call("dub_pause")}>{t("actions.pause")}</Button>
-            <Button onClick={() => call("dub_resume")}>{t("actions.resume")}</Button>
-            <Button onClick={() => call("dub_stop")}>{t("actions.stop")}</Button>
+          <Grid cols={4}>
+            <Button tone="primary" onClick={() => call("dub_start", { hwnd: selectedHwnd ? Number(selectedHwnd) : 0 })}>{t("actions.start", { defaultValue: "开始配音" })}</Button>
+            <Button onClick={() => call("dub_pause")}>{t("actions.pause", { defaultValue: "暂停" })}</Button>
+            <Button onClick={() => call("dub_resume")}>{t("actions.resume", { defaultValue: "继续" })}</Button>
+            <Button onClick={() => call("dub_stop")}>{t("actions.stop", { defaultValue: "停止配音" })}</Button>
           </Grid>
-          <Field label={t("fields.line")}>
-            <Input value={feedText} onChange={(v: any) => setFeedText(typeof v === "string" ? v : v?.target?.value || "")} placeholder="把这行台词交给猫娘…" />
+          <Field label={t("fields.line", { defaultValue: "台词文本" })}>
+            <Input value={feedText} onChange={(v: any) => setFeedText(typeof v === "string" ? v : v?.target?.value || "")} placeholder={t("panel.feed.placeholder", { defaultValue: "把这行台词交给猫娘…" })} />
           </Field>
-          <Button onClick={feed}>{t("actions.feed")}</Button>
+          <Button onClick={feed}>{t("actions.feed", { defaultValue: "朗读这一句" })}</Button>
         </Stack>
       </Card>
 
-      <Card title={t("panel.region")}>
+      <Card title={t("panel.region", { defaultValue: "对话框区域框选" })}>
         <Stack>
-          {state.capture_supported === false && <Alert tone="warning">v0.1 截屏通道仅支持 Windows 桌面。</Alert>}
-          <Grid columns={3}>
-            <Select label="目标窗口" options={[{ label: "（跟随前台）", value: "" }, ...windowOptions]} value={selectedHwnd} onChange={(v: any) => setSelectedHwnd(typeof v === "string" ? v : v?.target?.value || "")} />
-            <Button onClick={refreshWindows}>{t("actions.windows")}{windows.length ? `（${windows.length}）` : ""}</Button>
-            <Button onClick={grabPreview}>{t("actions.preview")}</Button>
+          {state.capture_supported === false && <Alert tone="warning">{t("panel.captureUnsupported", { defaultValue: "截屏通道仅支持 Windows 桌面。" })}</Alert>}
+          <Grid cols={3}>
+            <Field label={t("panel.target", { defaultValue: "目标窗口" })}>
+              <Select options={[{ label: t("panel.window.followFg", { defaultValue: "（跟随前台）" }), value: "" }, ...windowOptions]} value={selectedHwnd} onChange={(v: any) => setSelectedHwnd(typeof v === "string" ? v : v?.target?.value || "")} />
+            </Field>
+            <Button onClick={refreshWindows}>{t("actions.windows", { defaultValue: "刷新窗口列表" })}{windows.length ? `（${windows.length}）` : ""}</Button>
+            <Button onClick={grabPreview}>{t("actions.preview", { defaultValue: "截取预览" })}</Button>
           </Grid>
-          <Field label={t("panel.windowFilter")}>
-            <Input value={windowFilter} onChange={(v: any) => setWindowFilter(typeof v === "string" ? v : v?.target?.value || "")} placeholder="过滤：标题 / 进程名 / 句柄（空格分隔多词）" />
+          <Field label={t("panel.windowFilter", { defaultValue: "窗口过滤" })}>
+            <Input value={windowFilter} onChange={(v: any) => setWindowFilter(typeof v === "string" ? v : v?.target?.value || "")} placeholder={t("panel.filter.placeholder", { defaultValue: "过滤：标题 / 进程名 / 句柄（空格分隔多词）" })} />
           </Field>
           {preview ? (
             <div style={{ position: "relative", userSelect: "none" }}>
@@ -306,62 +352,73 @@ export default function Panel(props: PluginSurfaceProps<State>) {
               />
             </div>
           ) : (
-            <Text>先「截取预览」，再在画面上拖拽框住游戏的对话框区域。</Text>
+            <Text>{t("panel.region.hint", { defaultValue: "先「截取预览」，再在画面上拖拽框住游戏的对话框区域。" })}</Text>
           )}
-          <Grid columns={2}>
-            <Button tone="primary" onClick={saveRegion}>{t("actions.region")}</Button>
-            <Button onClick={() => call("test_capture", { hwnd: selectedHwnd ? Number(selectedHwnd) : 0 })}>{t("actions.testOcr")}</Button>
+          <Grid cols={2}>
+            <Button tone="primary" onClick={saveRegion}>{t("actions.region", { defaultValue: "保存区域" })}</Button>
+            <Button onClick={() => call("test_capture", { hwnd: selectedHwnd ? Number(selectedHwnd) : 0 })}>{t("actions.testOcr", { defaultValue: "测试识别" })}</Button>
           </Grid>
-          <Text>区域 x={shown.x.toFixed(2)} y={shown.y.toFixed(2)} w={shown.w.toFixed(2)} h={shown.h.toFixed(2)}（相对窗口比例）</Text>
+          <Text>{t("panel.region.line", { defaultValue: "区域 x={x} y={y} w={w} h={h}（相对窗口比例）", x: shown.x.toFixed(2), y: shown.y.toFixed(2), w: shown.w.toFixed(2), h: shown.h.toFixed(2) })}</Text>
         </Stack>
       </Card>
 
-      <Card title={t("panel.settings")}>
+      <Card title={t("panel.settings", { defaultValue: "配音规则" })}>
         <Stack>
-          <Grid columns={2}>
-            <NumberInput label={t("fields.pollInterval")} value={form.poll_interval_ms} min={200} max={10000} step={100} onChange={(v: any) => patch("poll_interval_ms", v)} />
-            <NumberInput label={t("fields.stableFrames")} value={form.stable_frames} min={1} max={8} step={1} onChange={(v: any) => patch("stable_frames", v)} />
-            <Switch label={t("fields.dubProtagonist")} checked={form.dub_protagonist} onChange={(v: any) => patch("dub_protagonist", v)} />
-            <Switch label={t("fields.dubMonologue")} checked={form.dub_monologue} onChange={(v: any) => patch("dub_monologue", v)} />
-            <Switch label={t("fields.pauseOnUser")} checked={form.pause_on_user_message} onChange={(v: any) => patch("pause_on_user_message", v)} />
-            <Switch label={t("fields.slowPollUnfocused")} checked={form.slow_poll_when_unfocused} onChange={(v: any) => patch("slow_poll_when_unfocused", v)} />
-            <Field label={t("fields.protagonistNames")}>
+          <Grid cols={2}>
+            <Field label={t("fields.pollInterval", { defaultValue: "轮询间隔（毫秒）" })}>
+              <NumberInput value={form.poll_interval_ms} min={200} max={10000} step={100} onChange={(v: any) => patch("poll_interval_ms", v)} />
+            </Field>
+            <Field label={t("fields.stableFrames", { defaultValue: "稳定帧数" })}>
+              <NumberInput value={form.stable_frames} min={1} max={8} step={1} onChange={(v: any) => patch("stable_frames", v)} />
+            </Field>
+            <Switch label={t("fields.dubProtagonist", { defaultValue: "朗读主角台词" })} checked={form.dub_protagonist} onChange={(v: any) => patch("dub_protagonist", v)} />
+            <Switch label={t("fields.dubMonologue", { defaultValue: "朗读内心独白" })} checked={form.dub_monologue} onChange={(v: any) => patch("dub_monologue", v)} />
+            <Switch label={t("fields.pauseOnUser", { defaultValue: "主人说话时自动暂停" })} checked={form.pause_on_user_message} onChange={(v: any) => patch("pause_on_user_message", v)} />
+            <Switch label={t("fields.slowPollUnfocused", { defaultValue: "失焦降频轮询" })} checked={form.slow_poll_when_unfocused} onChange={(v: any) => patch("slow_poll_when_unfocused", v)} />
+            <Field label={t("fields.protagonistNames", { defaultValue: "主角名（逗号分隔）" })}>
               <Input value={form.protagonist_names} onChange={(v: any) => patch("protagonist_names", typeof v === "string" ? v : v?.target?.value || "")} />
             </Field>
-          </Grid>
-            <Field label={t("fields.uiWords")}>
+            <Field label={t("fields.uiWords", { defaultValue: "UI 屏蔽词（逗号分隔）" })}>
               <Input value={form.ui_words} onChange={(v: any) => patch("ui_words", typeof v === "string" ? v : v?.target?.value || "")} />
             </Field>
-            <Field label={t("fields.captureMode")}>
+            <Field label={t("fields.captureMode", { defaultValue: "截屏方式" })}>
               <Select options={[
-                { label: t("capture.auto"), value: "auto" },
-                { label: t("capture.window"), value: "window" },
-                { label: t("capture.screen"), value: "screen" },
+                { label: t("capture.auto", { defaultValue: "自动（窗口优先，失败回退桌面）" }), value: "auto" },
+                { label: t("capture.window", { defaultValue: "仅窗口本体（抗遮挡，个别游戏不支持）" }), value: "window" },
+                { label: t("capture.screen", { defaultValue: "仅桌面截屏（旧行为）" }), value: "screen" },
               ]} value={form.capture_mode} onChange={(v: any) => patch("capture_mode", typeof v === "string" ? v : v?.target?.value || "auto")} />
             </Field>
-          <Button tone="primary" onClick={saveSettings}>{t("actions.settings")}</Button>
+          </Grid>
+          <Button tone="primary" onClick={saveSettings}>{t("actions.settings", { defaultValue: "保存设置" })}</Button>
         </Stack>
       </Card>
 
-      <Card title={t("panel.skipped")}>
+      <Card title={t("panel.skipped", { defaultValue: "跳过的行（供纠错）" })}>
         <DataTable
           data={state.skipped || []}
           rowKey="text"
           columns={[
-            { key: "text", label: "文本" },
-            { key: "reason", label: "原因" },
+            { key: "text", label: t("panel.skipCol.text", { defaultValue: "文本" }) },
+            { key: "reason", label: t("panel.skipCol.reason", { defaultValue: "原因" }) },
           ]}
         />
       </Card>
 
-      <Card title={t("panel.debug")}>
+      <Card title={t("panel.debug", { defaultValue: "调试" })}>
         <Stack>
-          <Text>OCR：{state.ocr?.initialized ? `已加载（${state.ocr?.lang_type}/${state.ocr?.ocr_version}）` : state.ocr?.error ? `未就绪：${state.ocr.error}` : "惰性加载中（首次识别时）"}</Text>
-          <Grid columns={2}>
-            <Button onClick={() => call("test_speak", { line: "配音通道测试，一。配音通道测试，二。" })}>{t("actions.testSpeak")}</Button>
-            <Button onClick={() => call("ocr_download")}>{t("actions.ocrModels")}</Button>
+          <Text>
+            {ocr?.initialized
+              ? t("panel.ocr.loaded", { defaultValue: "OCR：已加载（{model}）", model: `${ocr.lang_type}/${ocr.ocr_version}` })
+              : ocr?.error
+                ? t("panel.ocr.error", { defaultValue: "OCR：未就绪：{error}", error: ocr.error })
+                : t("panel.ocr.lazy", { defaultValue: "OCR：惰性加载中（首次识别时）" })}
+          </Text>
+          <Grid cols={2}>
+            {/* 测试句是给宿主 TTS 的语料（数据），不是界面文案 → 保持中文原样 */}
+            <Button onClick={() => call("test_speak", { line: "配音通道测试，一。配音通道测试，二。" })}>{t("actions.testSpeak", { defaultValue: "试听播报" })}</Button>
+            <Button onClick={() => call("ocr_download")}>{t("actions.ocrModels", { defaultValue: "下载其它语言模型" })}</Button>
           </Grid>
-          <Text>{t("panel.ocrHint")}</Text>
+          <Text>{t("panel.ocrHint", { defaultValue: "默认中文 v4 模型已随包内置，无需下载；仅当切换 [ocr] 语言/版本时才需要。" })}</Text>
         </Stack>
       </Card>
     </Page>

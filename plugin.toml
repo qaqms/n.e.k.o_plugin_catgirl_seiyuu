@@ -4,7 +4,7 @@ name = "猫娘声优"
 description = "让猫娘用她本人的声音逐字朗读游戏台词：PrintWindow 窗口本体截屏 + OCR 读字（不触碰游戏进程，零封号风险；不受遮挡，黑帧自动回退桌面截屏），台词稳定/去重后经宿主 TTS 管线逐句播报，一句播完再播下一句。一句「打开配音模式」即可开始，主人说话自动暂停。"
 short_description = "Catgirl voices visual-novel dialogue line by line via occlusion-proof window capture (PrintWindow + OCR) and host TTS; zero game injection."
 keywords = ["配音", "声优", "朗读", "dub", "dubbing", "voice", "galgame", "视觉小说", "visual novel", "文字冒险", "OCR", "截屏", "PrintWindow", "猫娘"]
-version = "0.2.0"
+version = "0.2.1"
 type = "plugin"
 entry = "plugin.plugins.catgirl_seiyuu:CatgirlSeiyuuPlugin"
 

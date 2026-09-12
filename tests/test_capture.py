@@ -151,7 +151,7 @@ async def test_dub_start_rejects_minimized_target(cs_make_plugin, cs_err, monkey
     err = await plugin.dub_start(hwnd=1234)
     # 反向对照：v0.1 无此检查——最小化窗照样 start，轮询吃哨兵坐标报错才停
     assert isinstance(err, cs_err)
-    assert "最小化" in str(err.error)
+    assert str(err.error) == "target_minimized"
     assert plugin._mode.mode == MODE_OFF
 
 

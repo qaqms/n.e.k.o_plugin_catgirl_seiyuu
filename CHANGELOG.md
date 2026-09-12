@@ -10,7 +10,56 @@
 - **Textractor hook**：比 OCR 更准的文本源（带 speaker/换行语义），但
   需要 hook 游戏进程，与零注入原则冲突 → 作为显式开关的高级模式，
   风险文案写进面板；
-- **游戏档案**：按窗口标题/进程名记忆区域与规则，切游戏自动切换。
+- **游戏档案**：按窗口标题/进程名记忆区域与规则，切游戏自动切换；
+- **HUD/LLM 面向文案的本地化**：本轮豁免面（`_push_hud` 运行时文案、
+  `@plugin_entry` description）继续中文直出，后续轮调研宿主 i18n 解析面。
+
+## [0.2.1] - 2026-09-12
+
+工程纪律收编轮（fc/ym 同源）：五门发布闸门落地，面板 i18n/错误码契约整改。
+
+### Fixed
+
+- **面板 Hosted TSX 类型错误（v0.1 就带着入库，市场 CI 不跑这道门所以一真没发现）**：
+  `Grid columns=` → `cols`（6 处，旧属性被运行时丢弃，四列布局一直在默默降级）；
+  `NumberInput`/`Select` 不支持 `label` 属性 → 改包 `Field`（轮询间隔/稳定帧数
+  两个输入框此前没有标题）；`StatusBadge text=` → `label`（状态徽章此前渲染为空）；
+  `tone="neutral"` 不在 Tone 类型内 → `"default"`；解构名 `api` 与宿主注入的
+  全局对象同名被检查器拒收 → `api: surfaceApi`（ym 同款）；`State` 类型里
+  `target` 字段重复声明→合并。验证方式：`tools/release_gate.py` 的
+  hosted-tsx 门在修复前红（逐条命中）、修复后绿。
+
+### Changed
+
+- **错误码契约（fc 主项 #10 同源）**：面板可达入口的 `Err(SdkError(…))` 全部
+  改发稳定 ASCII 码（`^[a-z][a-z0-9_]*$`，契约码集 `PANEL_ERROR_CODES` 23 码），
+  动态细节（异常 repr、宿主 reason、非法键名）一律进日志；前端 `errorText()`
+  按 `panel.errors.<camelCase>` 翻译，未知码回落码本身可排查。`last_error` /
+  `last_mode_hint` 快照字段同步改发码；底层错误（PrintWindow 家族、OCR 后端）
+  经 `_stable_code()` 映射归一，未识别形态落 `capture_failed`。
+- **面板 i18n 收编**：所有用户可见文案（模式/暂停原因/统计标签/目标行/toast/
+  占位符/跳过表头/OCR 状态/区域行）走 `t(key, { defaultValue })`，zh bundle 与
+  defaultValue 逐字同源；双语 bundle 40 → **105 键**；注册文案（入口名）
+  `@plugin_entry(name=…)` 全部改走 `tr()`（ui.action label 英文兜底，fc 同款）。
+- 入口 `test_speak`/`feed_line` 的空文本错误码统一为 `empty_line`。
+
+### Added
+
+- `tools/release_gate.py` 五门（pytest / ruff / check / **release（挂载+按裸 id
+  跑 `check -r`，复刻市场 CI）** / hosted-tsx），携带 ym 台账全部纪律：.vscode
+  随副本、缓存排除表、UTF-8 管道钩、副本用后即删、ruff 钉 CI 原样参数
+  `uvx ruff==0.12.4 --ignore-noqa`。
+- `tests/test_i18n_contract.py` 常驻契约门 13 例（A1 版本同源；C1-C9 双语键集/
+  TSX 引用面/defaultValue 同源/tr 同源/死键/码形/双向同步/映射不越界/归一化
+  行为/暂停原因与模式同源/插值参数；C8 TSX 硬编码中文扫描带豁免表）。
+- `tools/reverse_control.py` 反向对照脚本：12/12 逐门实测可红（C5/C6b 的跨门
+  级联属 JSON 结构性连坐，判据按目标门命中），终验全绿。
+- `.gitignore` 补 `uv.lock`（与 fc 对齐：锁文件不入库，vendor/ 本就是产物）。
+
+### Tests
+
+- 49 → 62 例；两处断言随契约迁移（回声护栏改钉 `target_is_self` 码、
+  最小化拒绝改钉 `target_minimized` 码）。
 
 ## [0.2.0] - 2026-09-12
 

@@ -78,7 +78,7 @@ async def test_dub_start_foreground_host_window_rejected(cs_make_plugin, cs_err,
     _stub_windows(monkeypatch, hwnd=1234, title="N.E.K.O")
     err = await plugin.dub_start()  # llm 渠道：前台是宿主 → 回声回路护栏
     assert isinstance(err, cs_err)
-    assert "N.E.K.O" in str(err.error)
+    assert str(err.error) == "target_is_self"
     assert plugin._mode.mode == MODE_OFF
 
 
