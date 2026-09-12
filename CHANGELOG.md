@@ -2,6 +2,34 @@
 
 本插件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.1.2] - 2026-09-12
+
+纯聊天控制：不开面板、不碰鼠标，全程用嘴。
+
+### Added
+
+- **`catgirl_seiyuu_resume` llm 工具**：对猫娘说「继续配音 / 接着念」即可从
+  暂停恢复，**复用暂停前的目标窗口**，不重新解析前台（此前没有 resume 工具，
+  自动让位后只能去面板点「继续」）。
+- **`dub_start` 暂停态降级**：无显式目标 + 处于暂停 + 原窗口存活时，start
+  视同 resume。LLM 把「继续配音」翻成 start 也能成功（旧行为：重新解析前台
+  → 撞上 v0.1.1 的宿主窗口护栏 → 报错）。显式传 hwnd/title（面板选窗）仍
+  正常切换目标，不被劫持。
+
+### Changed
+
+- `dub_pause` 幂等化：聊天里说「暂停」与 `pause_on_user_message` 自动让位
+  存在竞态（谁先到都能停），现在已暂停时重复暂停返回成功，不再回
+  「当前不在配音中」误导主人。
+- `catgirl_seiyuu_start` / `catgirl_seiyuu_pause` 工具描述改写，引导 LLM
+  区分「继续（resume）」与「重新开始（start）」。
+
+### Tests
+
+- 新增 `tests/test_chat_control.py` 6 例（resume 复用目标 / start 暂停态降级
+  / 显式换目标不受降级影响 / 竞态幂等 / off 时报错 / 目标已死拒绝恢复）；
+  31 → 37 例。反向对照：除「显式换目标」等价例外，5 例在 v0.1.1 上全部钉红。
+
 ## [0.1.1] - 2026-09-12
 
 缺陷修复轮（无新入口、无契约变化）。

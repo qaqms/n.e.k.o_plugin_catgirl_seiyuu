@@ -32,7 +32,7 @@ from plugin.sdk.plugin import (
 )
 
 from .core.rules import GateConfig, LineGate
-from .core.state import ModeMachine
+from .core.state import MODE_PAUSED, ModeMachine
 from .services import capture
 from .services.host_api import HostSpeakClient
 from .services.ocr import OcrService
@@ -523,6 +523,13 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
     async def dub_start(self, hwnd: int = 0, title: str = "", **_):
         if not capture.supported():
             return Err(SdkError(f"v0.1 仅支持 Windows 桌面截屏（当前 {capture.platform_reason()}）"))
+        # 纯聊天控制兼容：无显式目标 + 处于暂停 + 原目标窗口仍存活 → 视同
+        # 「继续」。否则 LLM 把「继续配音」翻成 start 时会重新解析前台——
+        # 前台是主人正在打字的聊天窗，必撞 target_is_self 护栏而报错。
+        # 要换目标请显式传 hwnd/title（面板选窗口后就会传）。
+        if not hwnd and not (title or "") and self._mode.mode == MODE_PAUSED:
+            if capture.is_window_valid(self._target_hwnd):
+                return await self.dub_resume()
         resolved_hwnd, resolved_title, err_reason = await asyncio.to_thread(
             self._resolve_target_sync, int(hwnd or 0), str(title or "")
         )
@@ -575,6 +582,10 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
     @ui.action(label=tr("actions.pause", default="Pause dubbing"))
     @plugin_entry(id="dub_pause", name=tr("entries.pause.name", default="暂停配音"), description="暂停配音模式（保留区域与去重记忆）。")
     async def dub_pause(self, **_):
+        if self._mode.mode == MODE_PAUSED:
+            # pause_on_user_message 可能已抢先暂停（聊天说「暂停」与自动让位的
+            # 竞态）：幂等成功，不再回「当前不在配音中」误导主人。
+            return Ok({"mode": MODE_PAUSED, "paused_reason": self._mode.paused_reason})
         if not self._mode.pause("manual"):
             return Err(SdkError("当前不在配音中"))
         self._drain_queue()
@@ -590,7 +601,7 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
         self._mode.resume()
         self._last_error = ""
         self._ensure_worker()
-        return Ok({"mode": "running"})
+        return Ok({"mode": "running", "target": self._target_title})
 
     @plugin_entry(
         id="dub_status",
@@ -782,7 +793,10 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
 
     @llm_tool(
         name="catgirl_seiyuu_start",
-        description="打开配音模式：开始逐字朗读目标窗口的游戏台词。主人说「打开配音模式/帮我配音/朗读游戏台词」时调用。",
+        description=(
+            "打开配音模式：开始逐字朗读目标窗口的游戏台词。主人说「打开配音模式/"
+            "帮我配音/朗读游戏台词」时调用。若只是从暂停恢复，优先用 catgirl_seiyuu_resume。"
+        ),
         parameters={"type": "object", "properties": {}},
     )
     async def tool_start(self, **_):
@@ -803,7 +817,7 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
 
     @llm_tool(
         name="catgirl_seiyuu_pause",
-        description="暂停配音模式（可再用 catgirl_seiyuu_start 继续）。",
+        description="暂停配音模式（恢复请用 catgirl_seiyuu_resume，彻底退出用 catgirl_seiyuu_stop）。",
         parameters={"type": "object", "properties": {}},
     )
     async def tool_pause(self, **_):
@@ -811,6 +825,21 @@ class CatgirlSeiyuuPlugin(NekoPluginBase):
         if isinstance(result, Err):
             return {"ok": False, "note": str(result.error)}
         return {"ok": True, "mode": "paused", "note": "配音已暂停"}
+
+    @llm_tool(
+        name="catgirl_seiyuu_resume",
+        description=(
+            "继续配音模式：接着暂停前的目标窗口恢复朗读（不重新选窗）。"
+            "主人说「继续配音/恢复配音/接着念/继续读吧/你接着念」时调用。"
+        ),
+        parameters={"type": "object", "properties": {}},
+    )
+    async def tool_resume(self, **_):
+        result = await self.dub_resume()
+        if isinstance(result, Err):
+            return {"ok": False, "note": str(result.error)}
+        return {"ok": True, "mode": "running", "target": result.value.get("target", ""),
+                "note": "配音已继续，最多确认一句，不要解说不要报幕"}
 
     @llm_tool(
         name="catgirl_seiyuu_status",
