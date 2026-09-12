@@ -325,6 +325,7 @@ export default function Panel(props: PluginSurfaceProps<State>) {
             <Button onClick={() => call("test_speak", { line: "配音通道测试，一。配音通道测试，二。" })}>{t("actions.testSpeak")}</Button>
             <Button onClick={() => call("ocr_download")}>{t("actions.ocrModels")}</Button>
           </Grid>
+          <Text>{t("panel.ocrHint")}</Text>
         </Stack>
       </Card>
     </Page>

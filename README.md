@@ -94,6 +94,28 @@ before publishing it.
 生成された `.github/workflows/release.yml` がプラグインパッケージをビルドして
 アップロードし、Market はその Release を独立検証してから公開します。
 
+## 打包元数据与宿主版本 / Packaged metadata schema
+
+宿主对包内 `plugin.meta.json` 做 **schema 版本与 SDK 大版本双重比对**，不符则
+整份丢弃并回落到 `plugin.toml` manifest（本插件 manifest 不声明入口）——
+表现为：面板能打开（UI 定义来自 manifest），但点任何按钮报
+`UI action 'xxx' is not a plugin entry`。
+
+- 仓库当前 CLI（跟随上游 main）产出 **schema 4**，面向 2026-09-07 之后的宿主；
+- 若需向**更早的宿主**（如 2026-09-03 构建）出兼容包，用对应 commit 的 CLI 重打：
+
+  ```bash
+  # 一次性：拉出老宿主 commit 的构建用 worktree
+  git -C ../N.E.K.O worktree add ../_schema3-build <老宿主commit>
+  # 用老 CLI 打包（依赖复用现有 .venv，PYTHONPATH 指向 worktree）
+  PYTHONPATH="../_schema3-build" "../N.E.K.O/.venv/Scripts/python.exe" \
+    -m plugin.neko_plugin_cli check -r .
+  # 产物在 ../_schema3-build/plugin/neko_plugin_cli/target/
+  ```
+
+  已验证：老宿主 `@message(auto_start)` 的默认值就是 True，当前源码对新
+  （无此参）/老（默认 True）宿主双向兼容，无需为老宿主加回参数。
+
 ## Entry
 
 ```toml
